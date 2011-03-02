@@ -5,10 +5,14 @@
 : ${VERSION:="11.04"}
 : ${VERSION_NAME:="natty"}
 : ${RELEASE:="latest"}
+: ${HOST:="${VERSION_NAME}"}
 
 # Generated ISO Prefix
 : ${ISOPREFIX:="phatforge"}
 : ${LABEL:="phatforge"}
+# Box prefix - personalise yourself (Default is to use the HOST name (which is the VERSION_NAME of the ubuntu release)).
+#: ${BOX_LABEL:="${LABEL}"}
+: ${BOX_LABEL:="${HOST}"}
 
 # Architectures being built.
 : ${ARCHS:="i386 amd64"}
@@ -16,7 +20,6 @@
 
 # Hardcoded host information.
 # : ${HOST:="devstructure"}
-: ${HOST:="${VERSION_NAME}"}
 : ${DOMAIN:="vagrantup.com"}
 : ${ROOT_PASSWORD:="vagrant"}
 : ${USER_NAME:="vagrant"}

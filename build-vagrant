@@ -66,7 +66,7 @@ do
 	# Now build the Vagrant box file.
 	vagrant package --base "$VBOX"
 	mv "package.box" \
-		"${LABEL}$([ "$ARCH" = "i386" ] && echo 32 || echo 64).box"
+		"${BOX_LABEL}$([ "$ARCH" = "i386" ] && echo 32 || echo 64).box"
 
         # Snapshot after vagrant dep install....
         VBoxManage snapshot "${VBOX}" take "AUTO_${LABEL}_vagrant_base__000002" --description "Snapshot taken after installing vagrant dependencies"
