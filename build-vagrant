@@ -31,6 +31,14 @@ do
         eval "$SSH \"
 	        sudo rm /etc/udev/rules.d/70-persistent-net.rules
 	\""
+
+	# Remove the Proxy configuration before packaging a box. Not all vagrant users will be running an apt proxy server on their machines.
+	[ ${BOX_DISABLE_APT_PROXY} -eq 1 ] && {
+        eval "$SSH \"
+	  sudo sed -i '/^Acquire::http::Proxy/ d' /etc/apt/apt.conf
+        \""
+	}
+
 	# Shutdown the virtual machine.
 	eval "$SSH \"sudo shutdown -h now\""
 	until VBoxManage showvminfo "$VBOX" | grep "^State: *powered off"
@@ -53,13 +61,6 @@ do
 	      break;
 	    }
 	  done
-	}
-
-	# Remove the Proxy configuration before packaging a box. Not all vagrant users will be running an apt proxy server on their machines.
-	[ ${BOX_DISABLE_APT_PROXY} -eq 1 ] && {
-        eval "$SSH \"
-	  sudo sed -i '/^Acquire::http::Proxy/ d' /etc/apt/apt.conf
-        \""
 	}
 
 	# Now build the Vagrant box file.
