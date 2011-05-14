@@ -1,0 +1,184 @@
+#!/bin/sh
+
+# UEC build [WVVVVMIP] (Work Very Very Very Very Much in Progress!)
+#
+
+set -e
+## While testing
+pkill -f "python -m SimpleHTTPServer" || true
+#set -x
+
+. "$(dirname $0)/config.sh"
+
+[ ${VBOX_UEC_BUILD} -eq 1 ] || {
+  echo "UEC Building is DISABLED. Please enable in config.sh"
+  exit 2
+}
+
+for ARCH in $ARCHS
+do
+        VBOX="${LABEL}-ubuntu-$VERSION-$DISTRO-$ARCH"
+	VBOX="${LABEL}-uec-ubuntu-${VERSION}-${DISTRO}-${ARCH}"
+	
+	UEC_DISABLE_USB="--vsys 0 --unit 6 --ignore"
+	UEC_DISABLE_CDROM="" #"--vsys 0 --unit 8 --ignore"
+	UEC_DISABLE_SCSI="" #"--vsys 0 --unit 9 --ignore"
+
+        vb_import_transform="--vsys 0 --vmname ${VBOX} ${UEC_DISABLE_USB} ${UEC_DISABLE_CDROM} ${UEC_DISABLE_SCSI}"
+	# Determine uec path 
+	[ "${UEC_TYPE}" = 'current' ] && {
+	  echo -n  "Using daily snapshot"
+	  UEC_TYPE_PATH="${VERSION_NAME}/current"
+	  [ "${UEC_VERSION}" != "" ] && { 
+	    UEC_TYPE_PATH="${VERSION_NAME}/${UEC_VERSION}"
+	    echo -n " version [${UEC_VERSION}]"
+	  }
+	} || {
+	  echo -n  "Using official release"
+          UEC_TYPE_PATH="releases/${VERSION_NAME}/release"
+	  [ "${UEC_VERSION}" != "" ] && {
+	    UEC_TYPE_PATH="releases/${VERSION_NAME}/${UEC_VERSION}"
+	    echo -n " version [${UEC_VERSION}]"
+	  }
+	}
+	UEC_OVF_DISK="http://uec-images.ubuntu.com/server/${UEC_TYPE_PATH}/${VERSION_NAME}-${DISTRO}-uec-${ARCH}-disk1.vmdk"
+	UEC_OVF_FILE="http://uec-images.ubuntu.com/server/${UEC_TYPE_PATH}/${VERSION_NAME}-${DISTRO}-uec-${ARCH}.ovf"
+       	CURR_DIR=$(pwd)
+
+	# Download the original netboot files if it isn't present already.
+	[ -d uec_base.d ] || mkdir -p uec_base.d
+	
+        echo "  Downloading... [${ARCH}]: "
+	for uec_file in $UEC_OVF_FILE $UEC_OVF_DISK; do
+           echo -n "${uec_file##*/}..."
+	   (cd uec_base.d && [ -f ${uec_file##*/} ] || wget -q -c --progress=bar "${uec_file}")
+	   echo "...Completed"
+	done
+	echo " ** Downloads... ...DONE"
+	### Import process for the UEC image. (Using the OVF exported files)
+	## 
+	# 1. Unzip the disk image. ??
+	# 2. Generate the transformation switches for the import.
+	# 3. Import the ovf and disk images.
+	# 4. Generate the meta/user-data files.
+	# 5. Launch webserver
+	# 6. Boot VM
+	import_command="VBoxManage import uec_base.d/${UEC_OVF_FILE##*/} ${vb_import_transform}"
+	
+	# Import vm if doesn't exist
+	VM_EXISTS=$(VBoxManage list vms | grep -c "${VBOX}") || true
+
+	[ ${VM_EXISTS} -eq 1 ] || { echo "Importing UEC VM: [${import_command}] "; ${import_command} ; }
+	
+	# Generate meta/user-data
+	[ -d ${PRESEED_PATH} ] || mkdir -p ${PRESEED_PATH}
+	# At the moment lets use Scott Mosers example files. 
+	[ -f ${PRESEED_PATH}/meta-data ] || wget -q --progress=bar http://smoser.brickies.net/ubuntu/uec-seed/meta-data
+	[ -f ${PRESEED_PATH}/user-data ] || wget -q --progress=bar http://smoser.brickies.net/ubuntu/uec-seed/user-data
+
+        # Launch vm if not running.
+	VM_RUNS=$(VBoxManage list runningvms | grep -c "${VBOX}") || true
+	
+	if [ ${VM_RUNS} -lt 1 ]; then
+	  ## Start a webserver for the preseed files.
+	  [ ${VBOX_UEC_BUILD} -eq 1 -a ${PRESEED_WEBSERVER} -eq 1 ] && {
+	    echo -n "Starting webserver for preseed files..."
+	    cd $PRESEED_PATH && python -m SimpleHTTPServer &
+	    webserver_PID=$!
+	    echo "done"
+	  }
+
+	  VBoxManage startvm "$VBOX" --type gui
+	  ## Set better perms on the private key to avoid ssh abort
+	  chmod 600 ${PRIVATE_KEY}
+	  #	VBoxManage modifyvm "${VBOX}" \
+	  #		--boot1 disk 
+	  until eval "$SSH exit"
+	  do
+	    sleep 60
+	  done
+        fi
+	
+	## Update grub for "UEC" Env, and install vbox additions
+	VBoxManage storageattach "$VBOX" \
+		--storagectl IDE \
+		--port 1 --device 0 \
+		--type dvddrive --medium "$VBOX_GUEST_ADDITIONS"
+	eval "$SSH \"
+		set -e
+		[ $(lsmod | grep -c vboxguest) -eq 1 ] && exit 0;
+		export DEBCONF_FRONTEND=noninteractive
+		sudo -E apt-get -y install linux-headers-\\\$(uname -r) build-essential
+		[ -d /media/cdrom ] || sudo mkdir -p /media/cdrom
+		until sudo mount /dev/cdrom /media/cdrom
+		do
+			sleep 1
+		done
+		[[ -e /media/cdrom/VBoxLinuxAdditions.run ]] && {
+		  sudo /media/cdrom/VBoxLinuxAdditions.run force
+		} || {
+  		  sudo /media/cdrom/VBoxLinuxAdditions-$([ "$ARCH" = "i386" ] \
+		 	  && echo x86 \
+			  || echo amd64
+		  ).run force --nox11
+		}
+		sudo umount /media/cdrom
+	\""
+	VBoxManage storageattach "$VBOX" \
+		--storagectl IDE \
+		--port 1 --device 0 \
+		--type dvddrive --medium emptydrive
+
+	VBoxManage guestcontrol copyto ${VBOX} uec_grub_update.sh /tmp/uec_grub_update.sh --username root
+	VBoxManage guestcontrol execute /tmp/uec_grub_update.sh --username root
+		eval "$SSH \"
+		         set -e
+			 
+		\""
+	read -p "Wait for vm to finish booting and grabbing meta-data. Press enter when ready to kill webserver [enter]"
+        [ ${VBOX_PXE_BUILD} -eq 1 -a ${PRESEED_WEBSERVER} -eq 1 ] && {
+          echo -n "Stopping webserver for preseed files..."
+          kill ${webserver_PID}
+	  wait && echo "done"
+	}
+	
+     
+#set -x
+continue
+	mv "${NETBOOT_DIR}/ubuntu-installer/${ARCH}/boot-screens/syslinux.cfg" "${NETBOOT_DIR}/ubuntu-installer/${ARCH}/boot-screens/syslinux.cfg_ORIG"
+	m4 \
+	        -D __LABEL__="${LABEL}" \
+		-D __ARCH__="$ARCH" \
+		-D __HOST__="$HOST" \
+		-D __PRESEED_URI__="${PRESEED_HOST}/${LABEL}.seed" \
+	        "pxelinux.cfg.m4" > "${NETBOOT_DIR}/ubuntu-installer/${ARCH}/boot-screens/syslinux.cfg"
+	ln -nfs ${NETBOOT_DIR}/pxelinux.0 ${NETBOOT_DIR}/${VBOX}.pxe
+	m4 \
+		-D __HOST__="$HOST" \
+		-D __DOMAIN__="$DOMAIN" \
+		-D __KERNEL__="linux-$([ "$ARCH" = "i386" ] \
+			&& echo generic-pae \
+			|| echo server
+		)" \
+		-D __ROOT_PASSWORD__="$ROOT_PASSWORD" \
+		-D __USER_NAME__="$USER_NAME" \
+		-D __PASSWORD__="$PASSWORD" \
+		-D __LABEL__="${LABEL}" \
+		-D __NFS_COMPAT__="${NFS_COMPAT}" \
+		-D __VERSION_NAME__="${VERSION_NAME}" \
+		-D __PROXY_URL__="${PROXY_URL}" \
+                -D __LOCALE__="en_US" \
+                -D __PRESEED_HOST__="${PRESEED_HOST}" \
+		"pxe.seed.m4" >"${PRESEED_PATH}/${LABEL}.seed"
+
+    # cp "$PUBLIC_KEY" "setup.sh" "$COPY/"
+	cp "$PUBLIC_KEY" "sudoers" "${NETBOOT_DIR}/"
+	tar -czf ${PRESEED_PATH}/setup.tgz "${PUBLIC_KEY}" "sudoers"
+	m4 \
+		-D __LABEL__="$LABEL" \
+		-D __PRESEED_HOST__="$PRESEED_HOST" \
+		-D __USER_NAME__="$USER_NAME" \
+		-D __PUBLIC_KEY__="$PUBLIC_KEY" \
+		"perm_setup.sh.m4" >"${PRESEED_PATH}/${LABEL}.sh"
+	echo "** Completed building custom pxe for ${LABEL} [${ARCH}]"
+done
